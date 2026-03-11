@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G-Code Nadzor Stroja</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 20px auto; 
+            max-width: 900px;
+            background-color: #f4f4f9;
+        }
+        h3 { margin-top: 0; }
+        .panel { 
+            background-color: white; 
+            border: 1px solid #ccc; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: flex; 
+            flex-direction: column;
+        }
+        
+        textarea { 
+            width: 100%; 
+            min-height: 500px; 
+            font-family: 'Courier New', Courier, monospace; 
+            font-size: 14px;
+            padding: 10px;
+            box-sizing: border-box;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            margin-bottom: 10px;
+            resize: vertical;
+        }
+
+        button { 
+            padding: 10px 15px; 
+            background-color: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-weight: bold;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; opacity: 0.7; }
+        
+        /* Barve gumbov */
+        .btn-clear { background-color: #dc3545; }
+        .btn-clear:hover { background-color: #c82333; }
+        .btn-success { background-color: #28a745; }
+        .btn-success:hover { background-color: #218838; }
+        .btn-serial { background-color: #fd7e14; }
+        .btn-serial:hover { background-color: #e86e13; }
+        .btn-danger { background-color: #dc3545; }
+        .btn-danger:hover { background-color: #bd2130; }
+        
+        .toolbar { 
+            display: flex; 
+            gap: 10px; 
+            flex-wrap: wrap; 
+            margin-bottom: 15px;
+            align-items: center;
+        }
+        
+        /* Prikaz velikosti */
+        .size-display {
+            margin-left: auto;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 5px 10px;
+            background: #e9ecef;
+            border-radius: 4px;
+        }
+
+        /* Progress Bar stili */
+        #progress_container {
+            display: none; /* Skrito, dokler se ne začne prenos */
+            width: 100%;
+            margin-bottom: 15px;
+            align-items: center;
+            gap: 10px;
+        }
+        progress {
+            flex-grow: 1;
+            height: 22px;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+        progress::-webkit-progress-bar {
+            background-color: #e9ecef;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        progress::-webkit-progress-value {
+            background-color: #28a745; /* Zelena barva kot v C# */
+            border-radius: 3px;
+            transition: width 0.1s ease;
+        }
+        #progress_text {
+            font-weight: bold;
+            min-width: 50px;
+            text-align: right;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="panel">
+        <h3>Nadzor Stroja in Urejevalnik G-Kode</h3>
+        
+        <div class="toolbar">
+            <input type="file" id="file_input" accept=".txt,.nc,.gcode,.mpf" style="display: none;" onchange="naloziDatoteko(event)">
+            
+            <button class="btn-success" onclick="document.getElementById('file_input').click()">📂 Odpri datoteko</button>
+            <button class="btn-serial" id="btn_povezi" onclick="poveziNaCOM()">🔌 Poveži stroj</button>
+            <button class="btn-serial" id="btn_poslji" onclick="posljiKodoNaStroj()" disabled>▶️ Pošlji kodo</button>
+            <button class="btn-danger" id="btn_brisi_stroj" onclick="pocistiStroj()" disabled>🗑️ Počisti mašino</button>
+            
+            <div id="velikost_label" class="size-display" style="color: darkgreen;">0 kB</div>
+        </div>
+
+        <div id="progress_container">
+            <progress id="progress_bar" value="0" max="100"></progress>
+            <span id="progress_text">0%</span>
+        </div>
+
+        <textarea id="gcode_output" oninput="preveriVelikost()" placeholder="Tukaj prilepite ali napišite G-kodo..."></textarea>
+        
+        <div class="toolbar">
+            <button onclick="kopirajKodo()">Kopiraj</button>
+            <button onclick="pocistiKodo()" class="btn-clear">Počisti urejevalnik</button>
+        </div>
+    </div>
+
+    <script>
+        // --- LOGIKA ZA PREVERJANJE VELIKOSTI ---
+        function preveriVelikost() {
+            const textarea = document.getElementById('gcode_output');
+            const velikostLabel = document.getElementById('velikost_label');
+
+            let koda = textarea.value;
+            let temp = koda.replace(/ /g, "").replace(/%MPF/g, "");
+            let dolzina = temp.length;
+
+            if (dolzina > 29350) {
+                textarea.style.backgroundColor = "#ffcccc"; 
+            } else {
+                textarea.style.backgroundColor = "white";
+            }
+
+            if (dolzina > 28000) {
+                velikostLabel.style.color = "red";
+            } else if (dolzina < 25000) {
+                velikostLabel.style.color = "darkgreen";
+            } else {
+                velikostLabel.style.color = "blueviolet";
+            }
+
+            velikostLabel.innerText = (dolzina / 1000).toFixed(3) + " kB";
+        }
+
+        function kopirajKodo() {
+            const textarea = document.getElementById('gcode_output');
+            textarea.select();
+            document.execCommand('copy');
+        }
+
+        function pocistiKodo() {
+            if(confirm('Izbrišem vsebino urejevalnika? To ne vpliva na stroj.')) {
+                document.getElementById('gcode_output').value = '';
+                preveriVelikost(); 
+            }
+        }
+
+        function naloziDatoteko(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('gcode_output').value = e.target.result;
+                preveriVelikost(); 
+            };
+            reader.readAsText(file);
+            event.target.value = ''; 
+        }
+
+        // --- KOMUNIKACIJA S STROJEM ---
+        let serialPort;
+        let serialWriter;
+
+        async function poveziNaCOM() {
+            if (!("serial" in navigator)) {
+                alert("Vaš brskalnik ne podpira Serial API. Uporabite Google Chrome ali Edge na namiznem računalniku.");
+                return;
+            }
+
+            try {
+                serialPort = await navigator.serial.requestPort();
+                
+                await serialPort.open({ 
+                    baudRate: 9600,         
+                    dataBits: 7,            
+                    stopBits: 2,            
+                    parity: "even",         
+                    flowControl: "hardware" 
+                }); 
+                
+                const textEncoder = new TextEncoderStream();
+                const writableStreamClosed = textEncoder.readable.pipeTo(serialPort.writable);
+                serialWriter = textEncoder.writable.getWriter();
+                
+                const btnPovezi = document.getElementById('btn_povezi');
+                btnPovezi.innerText = "✅ Povezano";
+                btnPovezi.style.backgroundColor = "#28a745"; 
+                
+                document.getElementById('btn_poslji').disabled = false;
+                document.getElementById('btn_brisi_stroj').disabled = false;
+                
+            } catch (error) {
+                console.error("Napaka pri povezovanju:", error);
+                alert("Napaka! Ali so vrata že v uporabi ali pa kabel ne podpira strojnega nadzora.");
+            }
+        }
+
+        // --- POŠILJANJE Z NAPREDKOM (PROGRESS BAR) ---
+        async function posljiKodoNaStroj() {
+            if (!serialWriter) {
+                alert("Najprej se povežite s strojem!");
+                return;
+            }
+
+            let koda = document.getElementById('gcode_output').value;
+            if (koda.trim() === '') {
+                alert("Ni kode za pošiljanje.");
+                return;
+            }
+
+            koda = koda.replace(/\r\n/g, "\n").replace(/\r/g, "\n").toUpperCase();
+            
+            // Pripravi UI za Progress Bar
+            const progContainer = document.getElementById('progress_container');
+            const progBar = document.getElementById('progress_bar');
+            const progText = document.getElementById('progress_text');
+            
+            progContainer.style.display = 'flex';
+            progBar.max = koda.length;
+            progBar.value = 0;
+            progText.innerText = "0%";
+            
+            // Onemogoči gumbe med prenosom
+            document.getElementById('btn_poslji').disabled = true;
+            document.getElementById('btn_brisi_stroj').disabled = true;
+
+            try {
+                // Razdelimo kodo na vrstice, da pošiljamo po kosih in posodabljamo UI
+                const vrstice = koda.split('\n');
+                let poslanoZnakov = 0;
+
+                for (let i = 0; i < vrstice.length; i++) {
+                    let vrstica = vrstice[i] + "\n";
+                    await serialWriter.write(vrstica);
+                    
+                    poslanoZnakov += vrstica.length;
+                    progBar.value = poslanoZnakov;
+                    
+                    // Izračun in izpis odstotka
+                    let odstotek = Math.round((poslanoZnakov / koda.length) * 100);
+                    if (odstotek > 100) odstotek = 100;
+                    progText.innerText = odstotek + "%";
+                    
+                    // Zelo kratek premor (10ms), da brskalnik lahko osveži UI in da damo stroju čas za procesiranje (podobno kot tvoj Task.Delay)
+                    await new Promise(r => setTimeout(r, 10)); 
+                }
+                
+                // Pošlji zaključni znak, kot si ga imel v C#
+                await serialWriter.write("$");
+                
+                progText.innerText = "100%";
+                alert("Koda uspešno poslana na stroj!");
+            } catch (error) {
+                console.error("Napaka pri pošiljanju:", error);
+                alert("Prišlo je do napake pri pošiljanju podatkov.");
+            } finally {
+                // Skrij progress bar in omogoči gumbe
+                setTimeout(() => {
+                    progContainer.style.display = 'none';
+                    document.getElementById('btn_poslji').disabled = false;
+                    document.getElementById('btn_brisi_stroj').disabled = false;
+                }, 1500); // Počakamo 1.5 sekunde, da uporabnik vidi 100%, preden skrijemo
+            }
+        }
+
+        async function pocistiStroj() {
+            if (!serialWriter) return;
+
+            if (confirm("Ste popolnoma prepričani, da želite IZBRISATI VSE PROGRAME na CNC stroju?")) {
+                const ukazZaBrisanje = "%CLF\nMPF0,999\nSPF200,299\nM30\n";
+                
+                try {
+                    await serialWriter.write(ukazZaBrisanje);
+                    alert("Ukaz za brisanje spomina je bil poslan na stroj.");
+                } catch (error) {
+                    console.error("Napaka pri brisanju:", error);
+                    alert("Napaka pri pošiljanju ukaza za brisanje.");
+                }
+            }
+        }
+    </script>
+</body>
+</html>
